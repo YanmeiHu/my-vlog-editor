@@ -22,9 +22,11 @@ except MediaError as exc:
     st.error(str(exc))
     st.stop()
 
+MAX_TOTAL_UPLOAD_MB = 100
+max_file_mb = st.get_option("server.maxUploadSize")
 st.session_state.setdefault("upload_generation", 0)
 uploads = st.file_uploader("① 添加视频", type=["mp4", "mov"], accept_multiple_files=True, key=f"uploads-{st.session_state['upload_generation']}",
-                           help="支持 MP4 / MOV；最多 12 个文件，单个 200 MB，总计 500 MB。")
+                           help=f"支持 MP4 / MOV；最多 12 个文件，单个 {max_file_mb} MB，总计 {MAX_TOTAL_UPLOAD_MB} MB。")
 st.caption("素材会上传到运行本应用的服务器。请只上传你有权处理的视频。")
 if st.button("清空素材与结果", use_container_width=True):
     generation = st.session_state["upload_generation"] + 1
@@ -32,10 +34,14 @@ if st.button("清空素材与结果", use_container_width=True):
     st.session_state["upload_generation"] = generation
     st.rerun()
 if not uploads:
+    st.session_state.pop("result", None)
     st.info("先添加几段视频，再调整顺序与保留时间。")
     st.stop()
-if len(uploads) > 12 or sum(u.size for u in uploads) > 500 * 1024**2:
-    st.error("素材超过限制：最多 12 个，总计不超过 500 MB。")
+if (len(uploads) > 12
+        or any(u.size > max_file_mb * 1024**2 for u in uploads)
+        or sum(u.size for u in uploads) > MAX_TOTAL_UPLOAD_MB * 1024**2):
+    st.session_state.pop("result", None)
+    st.error(f"素材超过限制：最多 12 个，单个不超过 {max_file_mb} MB，总计不超过 {MAX_TOTAL_UPLOAD_MB} MB。")
     st.stop()
 
 signature = hashlib.sha256(b"".join(hashlib.sha256(u.getbuffer()).digest() for u in uploads)).hexdigest()
@@ -51,7 +57,8 @@ def move(index: int, delta: int) -> None:
 
 
 try:
-    # Every rerun owns its input files; success, failures and disconnects leave no job files.
+    # Each rerun owns its input files; the context cleans up on normal unwinding.
+    # Process termination can bypass cleanup; never treat this disk as persistent storage.
     with tempfile.TemporaryDirectory(prefix="vlog-input-") as directory:
         paths = []
         infos = []

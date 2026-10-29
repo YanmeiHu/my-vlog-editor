@@ -116,3 +116,49 @@ def test_app_edit_export_and_invalidation(sources, monkeypatch):
     app.button[-1].click().run()
     assert app.error
     assert not app.exception
+
+
+@pytest.mark.parametrize("sizes", [[51], [40, 40, 21], [1] * 13])
+def test_app_rejects_upload_limits_before_reading(sizes, monkeypatch):
+    from types import SimpleNamespace
+    import streamlit as st
+    # Metadata alone is enough: validation must happen before reading file buffers.
+    uploads = [SimpleNamespace(size=size * 1024**2) for size in sizes]
+    monkeypatch.setattr(st, "file_uploader", lambda *args, **kwargs: uploads)
+    app = AppTest.from_file("app.py")
+    app.session_state["result"] = b"old export"
+    app.run()
+    assert not app.exception
+    assert "素材超过限制" in app.error[0].value
+    assert "result" not in app.session_state
+
+
+def test_app_input_cleanup_on_bad_media(tmp_path, monkeypatch):
+    import io
+    import streamlit as st
+    upload = io.BytesIO(b"broken video")
+    upload.name = "broken.mov"
+    upload.size = len(upload.getvalue())
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(st, "file_uploader", lambda *args, **kwargs: [upload])
+    app = AppTest.from_file("app.py").run()
+    assert app.error
+    assert not app.exception
+    assert not list(tmp_path.glob("vlog-input-*"))
+
+
+def test_app_input_cleanup_after_export(sources, tmp_path, monkeypatch):
+    import io
+    import streamlit as st
+    upload = io.BytesIO(sources[0].read_bytes())
+    upload.name = "source.mov"
+    upload.size = len(upload.getvalue())
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(st, "file_uploader", lambda *args, **kwargs: [upload])
+    app = AppTest.from_file("app.py").run()
+    assert not list(tmp_path.glob("vlog-input-*"))
+    app.button[-1].click().run(timeout=30)
+    assert not app.exception
+    assert app.session_state["result"]
+    assert not list(tmp_path.glob("vlog-input-*"))
+    assert not list(tmp_path.glob("vlog-render-*"))
