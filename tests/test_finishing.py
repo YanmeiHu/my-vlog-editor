@@ -103,7 +103,8 @@ def test_app_auto_and_subtitle_flow(tmp_path, monkeypatch):
     import streamlit as st
     from streamlit.testing.v1 import AppTest
     path = tmp_path / 'red.mp4'
-    make_video(path, 'red', True)
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i',
+                    'testsrc2=s=256x256:r=12:d=1','-c:v','libx264','-threads','1',str(path)],check=True)
     upload = io.BytesIO(path.read_bytes())
     upload.name, upload.size = path.name, path.stat().st_size
     monkeypatch.setattr(st, 'file_uploader', lambda label, **kwargs: None if '背景音乐' in label else [upload])
@@ -115,7 +116,7 @@ def test_app_auto_and_subtitle_flow(tmp_path, monkeypatch):
     assert app.warning  # Honest short-source warning.
     app.run()
     assert app.session_state['result']  # First one-click result survives a rerun.
-    app.checkbox[0].check().run()
+    next(c for c in app.checkbox if c.label == '启用字幕与配乐编辑').check().run()
     app.text_area[0].set_value('1\n00:00:00,050 --> 00:00:00,800\n你好 Hello').run()
     app.button[-1].click().run(timeout=30)
     assert not app.exception
