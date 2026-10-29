@@ -6,7 +6,8 @@ textColor = "#202136"
 font = "sans serif"
 
 [server]
-maxUploadSize = 200
+# Per-file limit in MB; keep small for Community Cloud memory budgets.
+maxUploadSize = 50
 
 [browser]
 gatherUsageStats = false
