@@ -1,3 +1,6 @@
+# Require wheels for native numerical/video dependencies; never compile on Cloud.
+--only-binary=:all:
 streamlit==1.50.0
-numpy==2.2.6
-opencv-python-headless==4.12.0.88
+# NumPy 2.3.5 provides CPython 3.14 wheels; OpenCV 4.13 permits NumPy >= 2.
+numpy==2.3.5
+opencv-python-headless==4.13.0.92
