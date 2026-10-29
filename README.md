@@ -46,7 +46,7 @@ Whisper tiny 可能误识别或在静音中产生幻觉，不保证字幕准确�
 
 ## 安装与启动
 
-需要 Python 3.12（已测试）、FFmpeg / ffprobe，FFmpeg 包含 libx264、AAC、libass；中文烧录需要 Noto CJK 字体。
+基础功能已在 Python 3.12.14 和 3.14.8 验证；需要 Python 3.11+、FFmpeg / ffprobe，FFmpeg 包含 libx264、AAC、libass；中文烧录需要 Noto CJK 字体。
 
 ```bash
 # Ubuntu / Debian；系统已提供时无需重复安装
@@ -73,7 +73,7 @@ python -m pip install -r requirements-asr.txt
 ## Streamlit Community Cloud
 
 1. 仓库选择 `YanmeiHu/my-vlog-editor`，分支选择包含 3.0 提交的分支（合并后可选 `main`），入口 **`app.py`**，不要选择 `hello.py`。
-2. Advanced settings 选择 **Python 3.12**。基础功能不需要 Secrets。
+2. Advanced settings 可选择 **Python 3.12**；使用 **Python 3.14** 时本次依赖组合也提供兼容 wheel。基础功能不需要 Secrets。
 3. 根目录 `requirements.txt` 安装固定版本 Streamlit、NumPy 和 headless OpenCV（无需 GUI/libGL）；`packages.txt` 安装系统 FFmpeg 和中文字体，无需自定义启动脚本。
 4. 若要在线识别，在部署分支的根目录 `requirements.txt` 增加 `faster-whisper==1.2.1` 后重新部署，并保证模型下载网络可用。**不要把 `requirements-asr.txt` 再反向包含进 requirements.txt**，它已包含基础依赖，会造成递归。
 5. 用短视频验证自动选段、两种比例、手动剪辑、字幕和下载；启用 ASR 后还需用真实中文和英文语音验收。模型下载与资源问题请查应用日志。
@@ -83,6 +83,16 @@ python -m pip install -r requirements-asr.txt
 每个应用进程同时只允许一个分析/编码/识别/合成重任务，忙时提示稍后重试，不是分布式任务队列。视频编码由 FFmpeg 顺序处理；视觉分析通过临时灰度文件逐帧读取，Python 仅保留相邻两帧及小型测量数据，不把整段视频帧载入内存。256×256、2 fps、10 分钟的灰度中间文件约 75 MiB，任务结束删除。HOG 检测/光流会增加 CPU 时间；对低资源实例优先使用短素材。输出 H.264 / AAC、30 fps、faststart，按比例补黑边；iPhone HEVC 需要系统解码器，HDR 色调映射尚未实现。
 
 上传、成片及 Streamlit 媒体缓存均占内存，应及时下载并清空。每次输入/编码/识别/合成使用独立临时目录，正常完成和异常回退会清理；进程被强制终止可能遗留临时文件。休眠/重启/重新部署不保留用户素材。不要公开部署敏感素材；长期任务、多用户高并发需要对象存储、鉴权和任务队列。
+
+### 修复 Python 3.14 卡在 Building NumPy
+
+旧组合 `numpy==2.2.6` 没有 CPython 3.14 wheel，而 `opencv-python-headless==4.12.0.88` 在 Python ≥3.9 时要求 NumPy <2.3，导致新解释器尝试源码构建或出现依赖冲突。FFmpeg 是独立的系统依赖，不是本次故障原因。
+
+当前固定 `numpy==2.3.5` 与 `opencv-python-headless==4.13.0.92`：前者提供 `cp314-cp314` Linux wheel，后者提供兼容 CPython 3.14 的 `cp37-abi3` Linux wheel，且允许 NumPy ≥2。`requirements.txt` 使用 pip/uv 均支持的 `--only-binary=:all:`，没有适用 wheel 时立即明确报错，不回退到源码编译。NumPy 要求 Python ≥3.11；Linux wheel 要求 glibc ≥2.28，适用于当前 Community Cloud 的 Debian 环境，不保证 Alpine/musl 或所有平台。
+
+已在全新 Python 3.14.8 环境使用 uv 仅安装 wheel 并运行基础功能全部 44 项测试；3.14.10 的补丁版本没有在本地单独运行，两者使用相同 `cp314` ABI。本次未修改剪辑逻辑、Streamlit 版本或 `packages.txt`，可选语音模型的验证边界不变。
+
+更新网站：将修复 PR 合并到 main，确认 Community Cloud 应用部署 main 的 `app.py`，等待依赖重建；若没有自动更新，在 **Manage app → Reboot app** 重启并查看日志。确认日志安装的是 NumPy 2.3.5 / OpenCV 4.13.0.92，不再出现 Building NumPy。Python 版本由 Community Cloud 的部署设置选择，requirements.txt 不会更改解释器；如需更改版本而设置页面不提供入口，按平台流程重新部署应用并在 Advanced settings 选择版本。
 
 ## 测试与验证边界
 
