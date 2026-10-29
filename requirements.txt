@@ -1,6 +1,7 @@
 # Require wheels for native numerical/video dependencies; never compile on Cloud.
 --only-binary=:all:
 streamlit==1.50.0
-# NumPy 2.3.5 provides CPython 3.14 wheels; OpenCV 4.13 permits NumPy >= 2.
+# Cloud: select Python 3.13 in deployment Advanced settings (not in this file).
+# Both NumPy 2.3.5 and OpenCV 4.13 have compatible Python 3.13/3.14 wheels.
 numpy==2.3.5
 opencv-python-headless==4.13.0.92
