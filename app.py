@@ -6,7 +6,8 @@ import tempfile
 
 import streamlit as st
 
-from vlog_editor.analysis import analyze, select_clips
+from vlog_editor.visual import analyze_visual, plan_clips
+from vlog_editor.beats import detect_beats
 from vlog_editor.captions import parse_srt, to_srt
 from vlog_editor.finishing import finish_video, transcribe
 from vlog_editor.media import Clip, MediaError, check_tools, export_video, probe
@@ -17,9 +18,9 @@ st.markdown("""<style>
 .stButton button,.stDownloadButton button {min-height:48px;border-radius:12px;}
 [data-testid="stFileUploader"] {border-radius:16px;}
 </style>""", unsafe_allow_html=True)
-st.title("轻剪 AI 2.0 🎬")
+st.title("轻剪 AI 3.0 🎬")
 st.write("把日常片段，剪成你的故事。")
-st.caption("自动选段基于镜头变化与静音规则，不具备 AI 语义理解；手动剪辑仍可使用。")
+st.caption("规则分析模式：实际检测运动、人物区域、清晰度和重复画面；不识别运动事件或理解故事含义。")
 try:
     check_tools()
 except MediaError as exc:
@@ -77,34 +78,67 @@ try:
             infos.append(probe(path))
         mode = st.selectbox("剪辑方式", ["手动剪辑", "自动选段"])
         clips = []
+        auto_music = None
+        auto_music_hash = None
+        auto_original_volume, auto_music_volume = 1.0, .2
         if mode == "自动选段":
-            st.caption("低分辨率采样检测镜头切换、画面变化和明显静音。候选分数不是内容精彩程度判断。")
+            profile_label = st.selectbox("自动剪辑模式", ["日常 Vlog", "运动精彩集锦"])
+            profile = "sports" if profile_label == "运动精彩集锦" else "vlog"
+            st.caption("规则分析：运动模式优先去除相机平移后的动作和人物区域运动；Vlog 优先清晰、曝光适中的多样画面并按素材顺序组织。人物 HOG 检测不等于动作/内容理解，无法判断进球或故事意义。")
             segment = st.slider("每段最多保留（秒）", 2, 10, 5)
             target = st.select_slider("目标成片时长（秒）", options=[15, 30, 60], value=30)
-            analysis_key = (signature, segment)
+            min_sharpness = st.slider("最低清晰度（规则阈值，可调低保留柔焦画面）", 0, 100, 8)
+            deduplicate = st.checkbox("去除近似重复画面", value=True)
+            auto_upload = st.file_uploader("背景音乐（卡点剪辑，最多 20 MB，可不上传）", type=["mp3", "wav", "m4a"], key="beat-music")
+            beats = []
+            if auto_upload is not None:
+                if auto_upload.size > 20 * 1024**2:
+                    raise MediaError("背景音乐不得超过 20 MB。")
+                auto_music = Path(directory) / ("beat-music" + Path(auto_upload.name).suffix.lower())
+                auto_music.write_bytes(auto_upload.getbuffer())
+                auto_music_hash = hashlib.sha256(auto_upload.getbuffer()).hexdigest()
+                if st.session_state.get("beat_key") != auto_music_hash:
+                    st.session_state["beats"] = detect_beats(auto_music)
+                    st.session_state["beat_key"] = auto_music_hash
+                beats = st.session_state.get("beats", [])
+                st.caption(f"检测到 {len(beats)} 个能量起音点；仅在片段时长允许时对齐，不保证复杂音乐逐拍准确。音乐会混入基础成片。")
+                auto_original_volume = st.slider("自动成片原声音量", 0.0, 1.0, 1.0, .05)
+                auto_music_volume = st.slider("自动成片配乐音量", 0.0, 1.0, .2, .05)
+            analysis_key = (signature, segment, profile, min_sharpness)
             if st.button("分析素材并生成候选", use_container_width=True):
                 st.session_state.pop("candidates", None)
                 st.session_state.pop("result", None)
                 st.session_state.pop("finished", None)
-                with st.spinner("正在检测镜头、画面变化与静音…"):
-                    st.session_state["candidates"] = analyze(paths, segment)
+                with st.spinner("正在分析光流、人物区域、清晰度与曝光…"):
+                    st.session_state["candidates"] = analyze_visual(paths, segment, profile, min_sharpness)
                     st.session_state["analysis_key"] = analysis_key
             if st.session_state.get("analysis_key") == analysis_key:
                 candidates = st.session_state.get("candidates", [])
-                clips = select_clips(candidates, paths, target)
-                st.write(f"检测到 {len(candidates)} 个候选；按分数筛选后恢复素材时间顺序。")
-                for clip in clips:
+                planned = plan_clips(candidates, paths, target, profile, beats, deduplicate)
+                plan_key = str((analysis_key, target, deduplicate, auto_music_hash))
+                st.write(f"检测到 {len(candidates)} 个候选，筛选后保留 {len(planned)} 段。可手动调整每段。")
+                for i, clip in enumerate(planned):
                     source = paths.index(clip.path)
-                    st.text(f"{uploads[source].name} · {clip.start:.2f}–{clip.end:.2f} 秒")
-                with st.expander("查看全部候选和筛选依据"):
-                    st.dataframe([{"素材": uploads[c.source].name, "开始": c.start,
-                                   "结束": c.end, "分数": round(c.score, 3), "依据": c.reason}
+                    with st.expander(f"片段 {i+1} · {uploads[source].name} · {clip.start:.2f}–{clip.end:.2f} 秒"):
+                        keep = st.checkbox("保留此片段", value=True, key=f"keep-{plan_key}-{i}")
+                        start = st.number_input("片段开始（秒）", min_value=0.0, max_value=infos[source].duration,
+                                                value=float(clip.start), step=.1, key=f"auto-start-{plan_key}-{i}")
+                        end = st.number_input("片段结束（秒）", min_value=0.0, max_value=infos[source].duration,
+                                              value=float(clip.end), step=.1, key=f"auto-end-{plan_key}-{i}")
+                        if keep:
+                            clips.append(Clip(clip.path, start, end))
+                with st.expander("查看全部候选和测量依据"):
+                    st.dataframe([{"素材": uploads[c.source].name, "开始": c.start, "结束": c.end,
+                                   "入选资格": c.eligible, "分数": round(c.score,3), "依据": c.reason}
                                   for c in candidates], hide_index=True)
                 actual = sum(c.end-c.start for c in clips)
+                st.caption(f"当前时间线约 {actual:.1f} 秒；手动调整后时长和卡点可发生变化。")
                 if actual < target - .04:
-                    st.warning(f"可用素材不足 {target} 秒，将导出约 {actual:.1f} 秒，不重复或补长素材。")
+                    st.warning(f"通过筛选的素材不足 {target} 秒，将导出约 {actual:.1f} 秒；不会用模糊或重复素材强行凑时长。")
+                if not clips:
+                    st.info("没有通过筛选的片段。可调低阈值、关闭去重，或使用手动剪辑。")
             else:
-                st.info("请先分析素材；更改每段保留时长后需重新分析。")
+                st.info("可先查看分析候选，也可直接一键生成。更改分析参数后需重新分析。")
         else:
             st.subheader("② 整理你的故事")
             clips = []
@@ -127,7 +161,8 @@ try:
         ratio = st.radio("画面比例", ["9:16", "16:9"], horizontal=True,
                          help="竖屏适合手机，横屏适合大屏；保留完整画面，空白处补黑边。")
         st.caption("输出 720p · H.264 / AAC · 最长 10 分钟。处理期间请保持页面打开。")
-        edit_signature = (mode, signature, tuple((str(c.path.name), c.start, c.end) for c in clips), ratio)
+        edit_signature = (mode, signature, tuple((str(c.path.name), c.start, c.end) for c in clips), ratio,
+                          (analysis_key, target, deduplicate, auto_music_hash, auto_original_volume, auto_music_volume) if mode == "自动选段" else None)
         if st.session_state.get("edit_signature") != edit_signature:
             st.session_state.pop("result", None)
             st.session_state.pop("finished", None)
@@ -136,16 +171,22 @@ try:
             st.session_state.pop("result", None)
             st.session_state.pop("finished", None)
             with st.spinner("正在剪辑与合并，请稍候…"):
-                if mode == "自动选段" and not clips:
-                    candidates = analyze(paths, segment)
+                if mode == "自动选段" and st.session_state.get("analysis_key") != analysis_key:
+                    candidates = analyze_visual(paths, segment, profile, min_sharpness)
                     st.session_state["candidates"] = candidates
                     st.session_state["analysis_key"] = analysis_key
-                    clips = select_clips(candidates, paths, target)
+                    clips = plan_clips(candidates, paths, target, profile, beats, deduplicate)
                     actual = sum(c.end-c.start for c in clips)
                     if actual < target - .04:
-                        st.warning(f"素材不足，将导出约 {actual:.1f} 秒。")
-                    st.session_state["edit_signature"] = (mode, signature, tuple((str(c.path.name), c.start, c.end) for c in clips), ratio)
-                st.session_state["result"] = export_video(clips, ratio)
+                        st.warning(f"通过筛选的素材不足，将导出约 {actual:.1f} 秒。")
+                    st.session_state["edit_signature"] = (mode, signature, tuple((str(c.path.name), c.start, c.end) for c in clips), ratio,
+                        (analysis_key, target, deduplicate, auto_music_hash, auto_original_volume, auto_music_volume))
+                if not clips:
+                    raise MediaError("没有保留片段，请调整筛选参数或使用手动剪辑。")
+                video = export_video(clips, ratio)
+                if auto_music is not None:
+                    video = finish_video(video, [], auto_music, auto_music_volume, auto_original_volume)
+                st.session_state["result"] = video
         if st.session_state.get("result"):
             st.success("成片已生成，可以预览和保存了。")
             st.video(st.session_state["result"], format="video/mp4")
