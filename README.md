@@ -46,7 +46,7 @@ Whisper tiny 可能误识别或在静音中产生幻觉，不保证字幕准确�
 
 ## 安装与启动
 
-基础功能已在 Python 3.12.14 和 3.14.8 验证；需要 Python 3.11+、FFmpeg / ffprobe，FFmpeg 包含 libx264、AAC、libass；中文烧录需要 Noto CJK 字体。
+推荐部署 Python 3.13；基础功能已在 Python 3.12.14、3.13.16 和 3.14.8 验证，需要 Python 3.11+、FFmpeg / ffprobe，FFmpeg 包含 libx264、AAC、libass；中文烧录需要 Noto CJK 字体。
 
 ```bash
 # Ubuntu / Debian；系统已提供时无需重复安装
@@ -73,7 +73,7 @@ python -m pip install -r requirements-asr.txt
 ## Streamlit Community Cloud
 
 1. 仓库选择 `YanmeiHu/my-vlog-editor`，分支选择包含 3.0 提交的分支（合并后可选 `main`），入口 **`app.py`**，不要选择 `hello.py`。
-2. Advanced settings 可选择 **Python 3.12**；使用 **Python 3.14** 时本次依赖组合也提供兼容 wheel。基础功能不需要 Secrets。
+2. 在新建/重新部署页面打开 **Advanced settings → Python version → 3.13 → Save**。本项目优先验证 3.13；现有应用不能就地更换解释器，详见下方迁移步骤。基础功能不需要 Secrets。
 3. 根目录 `requirements.txt` 安装固定版本 Streamlit、NumPy 和 headless OpenCV（无需 GUI/libGL）；`packages.txt` 安装系统 FFmpeg 和中文字体，无需自定义启动脚本。
 4. 若要在线识别，在部署分支的根目录 `requirements.txt` 增加 `faster-whisper==1.2.1` 后重新部署，并保证模型下载网络可用。**不要把 `requirements-asr.txt` 再反向包含进 requirements.txt**，它已包含基础依赖，会造成递归。
 5. 用短视频验证自动选段、两种比例、手动剪辑、字幕和下载；启用 ASR 后还需用真实中文和英文语音验收。模型下载与资源问题请查应用日志。
@@ -90,9 +90,22 @@ python -m pip install -r requirements-asr.txt
 
 当前固定 `numpy==2.3.5` 与 `opencv-python-headless==4.13.0.92`：前者提供 `cp314-cp314` Linux wheel，后者提供兼容 CPython 3.14 的 `cp37-abi3` Linux wheel，且允许 NumPy ≥2。`requirements.txt` 使用 pip/uv 均支持的 `--only-binary=:all:`，没有适用 wheel 时立即明确报错，不回退到源码编译。NumPy 要求 Python ≥3.11；Linux wheel 要求 glibc ≥2.28，适用于当前 Community Cloud 的 Debian 环境，不保证 Alpine/musl 或所有平台。
 
-已在全新 Python 3.14.8 环境使用 uv 仅安装 wheel 并运行基础功能全部 44 项测试；3.14.10 的补丁版本没有在本地单独运行，两者使用相同 `cp314` ABI。本次未修改剪辑逻辑、Streamlit 版本或 `packages.txt`，可选语音模型的验证边界不变。
+已在全新 Python 3.13.16 和 Python 3.14.8 环境使用 uv 仅安装 wheel，分别通过基础功能全部 44 项测试；3.14.10 的补丁版本没有在本地单独运行，与 3.14.8 使用相同 `cp314` ABI。本次未修改剪辑逻辑、Streamlit 版本或 `packages.txt`，可选语音模型的验证边界不变。
 
-更新网站：将修复 PR 合并到 main，确认 Community Cloud 应用部署 main 的 `app.py`，等待依赖重建；若没有自动更新，在 **Manage app → Reboot app** 重启并查看日志。确认日志安装的是 NumPy 2.3.5 / OpenCV 4.13.0.92，不再出现 Building NumPy。Python 版本由 Community Cloud 的部署设置选择，requirements.txt 不会更改解释器；如需更改版本而设置页面不提供入口，按平台流程重新部署应用并在 Advanced settings 选择版本。
+### 将现有 Cloud 应用切换为 Python 3.13
+
+根据 [Streamlit 官方更换 Python 版本说明](https://docs.streamlit.io/deploy/streamlit-community-cloud/manage-your-app/upgrade-python)，Python 版本只能在部署时选择，已有应用需删除后重新部署才能更换。**不是在现有应用的 Settings / General 中修改，也不能靠 Reboot、requirements.txt、runtime.txt 或 .python-version 切换。** 本仓库没有添加会造成这种错觉的版本文件。
+
+1. 先合并修复 PR，确认 GitHub `main/requirements.txt` 是 NumPy **2.3.5**、OpenCV **4.13.0.92**，有 `--only-binary=:all:`。如果日志仍显示 2.2.6，先核对构建时间、部署的仓库/分支/入口，不能把它当成当前 main 的成功重建记录。
+2. 在 [share.streamlit.io](https://share.streamlit.io) 记录旧应用的 URL/自定义子域名、仓库/分支/入口和 Secrets（如有，请自行安全备份，不要粘贴到聊天）。删除应用会丢失运行中会话和临时素材，先下载需要的成片；不会删除 GitHub 仓库。
+3. 依官方流程，在应用列表对应应用右侧 **⋮ → Delete app** 删除旧实例。若想先验证而不删除旧站，可先在平台允许的情况下用不同子域名创建测试实例。
+4. 点击 **Create app → Yup, I have an app**，填写仓库 `YanmeiHu/my-vlog-editor`、分支 **main**、入口 **app.py**。重新使用旧的自定义子域名时，需先删除旧实例释放它。
+5. 打开 **Advanced settings → Python version**，明确选择 **3.13**，恢复必要 Secrets，点击 **Save → Deploy**。
+6. 查看这一次新构建日志：应显示 Python **3.13.x**，下载 NumPy 2.3.5 / OpenCV 4.13 wheel，不应出现 `Building numpy==2.2.6`。启动后用短视频检查手动剪辑、自动选段、预览和下载。
+
+只更新代码/依赖而保留原解释器时，合并到 main 通常会自动重建；必要时用 **Manage app → Reboot app**。这不会把 3.14 改成 3.13。此次开发环境验证不能代替线上部署验收，聊天工具无法直接操作你的 Community Cloud 控制台。
+
+运行依赖仅保留 Streamlit、NumPy 和 headless OpenCV 三项直接依赖；系统依赖仍为 FFmpeg、中文字体。测试依赖在 `requirements-dev.txt`，语音识别/模型依赖在可选的 `requirements-asr.txt`，不会拖慢基础部署。Streamlit 自身依赖的 pandas/pyarrow 等不能随意删除。新增 GitHub Actions 使用 Python 3.13、仅 wheel 安装并运行完整回归测试，防止后续退回不兼容组合；工作流需推送后才会在 GitHub 上执行。
 
 ## 测试与验证边界
 
