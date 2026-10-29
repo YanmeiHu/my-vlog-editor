@@ -59,8 +59,8 @@ def probe(path: Path) -> MediaInfo:
 
 def export_video(clips: list[Clip], ratio: str) -> bytes:
     check_tools()
-    if not clips or len(clips) > 12:
-        raise MediaError("请选择 1–12 段视频。")
+    if not clips or len(clips) > 120:
+        raise MediaError("请选择 1–120 段剪辑片段。")
     if ratio not in ("9:16", "16:9"):
         raise MediaError("请选择支持的输出比例。")
     infos = [probe(c.path) for c in clips]
