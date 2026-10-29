@@ -57,7 +57,7 @@ def probe(path: Path) -> MediaInfo:
     return MediaInfo(duration, any(s.get("codec_type") == "audio" for s in streams))
 
 
-def export_video(clips: list[Clip], ratio: str) -> bytes:
+def _export_video(clips: list[Clip], ratio: str) -> bytes:
     check_tools()
     if not clips or len(clips) > 120:
         raise MediaError("请选择 1–120 段剪辑片段。")
@@ -95,3 +95,8 @@ def export_video(clips: list[Clip], ratio: str) -> bytes:
              "concat", "-safe", "1", "-i", str(manifest), "-c", "copy", "-movflags",
              "+faststart", str(output)], timeout=120)
         return output.read_bytes()
+
+
+def export_video(clips: list[Clip], ratio: str) -> bytes:
+    from vlog_editor.resources import bounded_job
+    return bounded_job(_export_video)(clips, ratio)

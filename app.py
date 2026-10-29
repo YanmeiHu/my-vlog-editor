@@ -1,11 +1,14 @@
 """Mobile-first Chinese video editor."""
 import hashlib
+import importlib.util
 from pathlib import Path
 import tempfile
 
 import streamlit as st
 
 from vlog_editor.analysis import analyze, select_clips
+from vlog_editor.captions import parse_srt, to_srt
+from vlog_editor.finishing import finish_video, transcribe
 from vlog_editor.media import Clip, MediaError, check_tools, export_video, probe
 
 st.set_page_config(page_title="轻剪 · Vlog 视频剪辑", page_icon="🎬", layout="centered")
@@ -36,12 +39,14 @@ if st.button("清空素材与结果", use_container_width=True):
     st.rerun()
 if not uploads:
     st.session_state.pop("result", None)
+    st.session_state.pop("finished", None)
     st.info("先添加几段视频，再调整顺序与保留时间。")
     st.stop()
 if (len(uploads) > 12
         or any(u.size > max_file_mb * 1024**2 for u in uploads)
         or sum(u.size for u in uploads) > MAX_TOTAL_UPLOAD_MB * 1024**2):
     st.session_state.pop("result", None)
+    st.session_state.pop("finished", None)
     st.error(f"素材超过限制：最多 12 个，单个不超过 {max_file_mb} MB，总计不超过 {MAX_TOTAL_UPLOAD_MB} MB。")
     st.stop()
 
@@ -50,6 +55,7 @@ if st.session_state.get("source_signature") != signature:
     st.session_state["source_signature"] = signature
     st.session_state["order"] = list(range(len(uploads)))
     st.session_state.pop("result", None)
+    st.session_state.pop("finished", None)
     st.session_state.pop("candidates", None)
 
 
@@ -79,6 +85,7 @@ try:
             if st.button("分析素材并生成候选", use_container_width=True):
                 st.session_state.pop("candidates", None)
                 st.session_state.pop("result", None)
+                st.session_state.pop("finished", None)
                 with st.spinner("正在检测镜头、画面变化与静音…"):
                     st.session_state["candidates"] = analyze(paths, segment)
                     st.session_state["analysis_key"] = analysis_key
@@ -123,9 +130,11 @@ try:
         edit_signature = (mode, signature, tuple((str(c.path.name), c.start, c.end) for c in clips), ratio)
         if st.session_state.get("edit_signature") != edit_signature:
             st.session_state.pop("result", None)
+            st.session_state.pop("finished", None)
         st.session_state["edit_signature"] = edit_signature
         if st.button("生成我的视频", type="primary", use_container_width=True, disabled=not clips and mode != "自动选段"):
             st.session_state.pop("result", None)
+            st.session_state.pop("finished", None)
             with st.spinner("正在剪辑与合并，请稍候…"):
                 if mode == "自动选段" and not clips:
                     candidates = analyze(paths, segment)
@@ -142,6 +151,54 @@ try:
             st.video(st.session_state["result"], format="video/mp4")
             st.download_button("下载 MP4 视频", data=st.session_state["result"],
                                file_name="my-vlog.mp4", mime="video/mp4", use_container_width=True)
+            with st.expander("④ 字幕与背景音乐（可选）"):
+                if st.checkbox("启用字幕与配乐编辑"):
+                    base = st.session_state["result"]
+                    base_key = hashlib.sha256(base).hexdigest()
+                    srt_key = f"srt-{base_key}"
+                    language = st.selectbox("语音语言", ["中文", "English"])
+                    available = importlib.util.find_spec("faster_whisper") is not None
+                    st.caption("语音识别使用可选的开源 Whisper tiny CPU 模型，首次需下载模型；无需付费 API 或 GPU。识别可能出错，请核对字幕。限 120 秒、5 分钟超时。")
+                    if not available:
+                        st.info("此部署未安装可选语音识别依赖，仍可手动填写 SRT 字幕。部署者可按 README 启用。")
+                    if st.button("识别语音并生成字幕", disabled=not available):
+                        with st.spinner("正在识别语音（首次下载可能较慢）…"):
+                            cues = transcribe(base, "zh" if language == "中文" else "en")
+                            st.session_state[srt_key] = to_srt(cues)
+                            if not cues:
+                                st.info("未识别到语音，可手动添加字幕。")
+                    text = st.text_area("字幕预览与修改（SRT）", value="", key=srt_key,
+                                        height=220, max_chars=100000,
+                                        help="格式示例：序号 1，下一行 00:00:00,000 --> 00:00:01,000，再下一行填写文字。时间相对于当前成片。")
+                    source = Path(directory) / "base.mp4"
+                    source.write_bytes(base)
+                    cues = parse_srt(text, probe(source).duration)
+                    if cues:
+                        st.dataframe([{"开始": c.start, "结束": c.end, "字幕": c.text} for c in cues], hide_index=True)
+                    st.download_button("下载 SRT 字幕", data=to_srt(cues), file_name="my-vlog.srt", mime="text/plain")
+                    music_upload = st.file_uploader("背景音乐（最多 20 MB）", type=["mp3", "wav", "m4a"], key=f"music-{base_key}")
+                    original_volume = st.slider("原声音量", 0.0, 1.0, 1.0, .05)
+                    music_volume = st.slider("配乐音量", 0.0, 1.0, .2, .05)
+                    music_path = None
+                    music_hash = None
+                    if music_upload is not None:
+                        if music_upload.size > 20 * 1024**2:
+                            raise MediaError("背景音乐不得超过 20 MB。")
+                        music_path = Path(directory) / ("music" + Path(music_upload.name).suffix.lower())
+                        music_path.write_bytes(music_upload.getbuffer())
+                        music_hash = hashlib.sha256(music_upload.getbuffer()).hexdigest()
+                    finish_key = (base_key, text, music_hash, original_volume, music_volume)
+                    if st.session_state.get("finish_key") != finish_key:
+                        st.session_state.pop("finished", None)
+                    if st.button("烧录字幕并合成配乐", use_container_width=True):
+                        st.session_state.pop("finished", None)
+                        with st.spinner("正在合成字幕和音乐…"):
+                            st.session_state["finished"] = finish_video(base, cues, music_path, music_volume, original_volume)
+                            st.session_state["finish_key"] = finish_key
+                    if st.session_state.get("finished"):
+                        st.video(st.session_state["finished"])
+                        st.download_button("下载字幕配乐版 MP4", data=st.session_state["finished"],
+                                           file_name="my-vlog-captioned.mp4", mime="video/mp4", use_container_width=True)
 except MediaError as exc:
     st.error(str(exc))
 except OSError:

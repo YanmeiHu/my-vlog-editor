@@ -6,6 +6,7 @@ import re
 import subprocess
 
 from vlog_editor.media import Clip, MediaError, probe
+from vlog_editor.resources import bounded_job
 
 
 @dataclass(frozen=True)
@@ -53,6 +54,7 @@ def parse_silences(log: str, duration: float) -> list[tuple[float, float]]:
     return intervals
 
 
+@bounded_job
 def analyze(paths: list[Path], segment_seconds: float = 5.0) -> list[Candidate]:
     if not math.isfinite(segment_seconds) or not 2 <= segment_seconds <= 10:
         raise MediaError("候选片段长度应为 2–10 秒。")

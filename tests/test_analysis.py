@@ -46,3 +46,15 @@ def test_invalid_analysis():
         analyze([], 5)
     with pytest.raises(MediaError):
         analyze([], float('nan'))
+
+
+@pytest.mark.parametrize('target', [15, 30, 60])
+def test_real_target_export(tmp_path, target):
+    source = tmp_path / 'long.mp4'
+    subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i',
+                    'color=green:s=32x32:r=2:d=65', '-c:v', 'libx264', '-threads', '1', str(source)],
+                   check=True, capture_output=True)
+    candidates = [Candidate(0, i, min(i+5, 65), 0, '无音轨') for i in range(0, 65, 5)]
+    output = tmp_path / 'target.mp4'
+    output.write_bytes(export_video(select_clips(candidates, [source], target), '9:16'))
+    assert probe(output).duration == pytest.approx(target, abs=.4)
